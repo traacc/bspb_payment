@@ -239,6 +239,13 @@ class Bspb_Payment_Widget extends Widget_Base
                 break;
             }
         }
+
+        // Сохраняем прайс-лист на сервере (index => price/label). AJAX-обработчик
+        // возьмёт цену отсюда по widget_id — не зависит от того, где размещён
+        // виджет (страница, шаблон Theme Builder, Loop и т.п.).
+        if (function_exists('bspb_ep_store_options')) {
+            bspb_ep_store_options($widget_id, $options);
+        }
         ?>
         <div class="bspb-payment-widget"
              data-post-id="<?php echo esc_attr($post_id); ?>"

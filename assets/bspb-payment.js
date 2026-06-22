@@ -63,6 +63,9 @@
                         window.location.href = res.data.url;
                     } else {
                         var msg = (res && res.data && res.data.message) || BSPB_PAYMENT.i18n.error;
+                        if (res && res.data && res.data.debug) {
+                            msg += ' [' + res.data.debug + ']';
+                        }
                         showMessage(message, msg, true);
                         button.disabled = false;
                     }

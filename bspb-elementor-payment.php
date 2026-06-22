@@ -89,28 +89,93 @@ function bspb_ep_find_element(array $elements, string $widget_id)
 }
 
 /* -------------------------------------------------------------------------
- * Возвращает настройки виджета по post_id + widget_id с учётом дефолтов.
+ * Хранилище прайс-листа виджета (index => [price, label]) в transient.
+ * Заполняется при render() виджета; читается AJAX-обработчиком. Не зависит от
+ * расположения виджета в дереве Elementor.
  * ---------------------------------------------------------------------- */
-function bspb_ep_get_widget_settings(int $post_id, string $widget_id)
+function bspb_ep_options_key(string $widget_id): string
 {
-    $document = \Elementor\Plugin::$instance->documents->get($post_id);
-    if (!$document) {
+    return 'bspb_ep_opts_' . $widget_id;
+}
+
+function bspb_ep_store_options(string $widget_id, array $options): void
+{
+    $store = [];
+    foreach ($options as $i => $opt) {
+        $store[$i] = [
+            'price' => isset($opt['option_price']) ? (float) $opt['option_price'] : 0.0,
+            'label' => isset($opt['option_label']) ? (string) $opt['option_label'] : '',
+        ];
+    }
+    // Месяц жизни; перезаписывается при каждом рендере виджета.
+    set_transient(bspb_ep_options_key($widget_id), $store, MONTH_IN_SECONDS);
+}
+
+function bspb_ep_get_stored_options(string $widget_id)
+{
+    $store = get_transient(bspb_ep_options_key($widget_id));
+    return is_array($store) ? $store : null;
+}
+
+/* -------------------------------------------------------------------------
+ * Ищет данные элемента по widget_id среди нескольких документов-кандидатов.
+ * Возвращает [element_data, post_id] либо null. $reason заполняется причиной.
+ * ---------------------------------------------------------------------- */
+function bspb_ep_locate_element(int $post_id, string $widget_id, &$reason = '')
+{
+    $documents = \Elementor\Plugin::$instance->documents;
+
+    // Кандидаты: переданный post_id + текущий документ (на случай Theme Builder/loop).
+    $candidate_ids = array_unique(array_filter([
+        $post_id,
+        (int) get_queried_object_id(),
+        (int) get_the_ID(),
+    ]));
+
+    foreach ($candidate_ids as $cid) {
+        $document = $documents->get($cid);
+        if (!$document) {
+            continue;
+        }
+        $element_data = bspb_ep_find_element($document->get_elements_data(), $widget_id);
+        if ($element_data !== null) {
+            return [$element_data, $cid];
+        }
+    }
+
+    $reason = 'element_not_found (искали в документах: ' . implode(',', $candidate_ids) . ')';
+    return null;
+}
+
+/* -------------------------------------------------------------------------
+ * Возвращает настройки виджета по post_id + widget_id с учётом дефолтов.
+ * При неудаче $reason содержит причину (для диагностики).
+ * ---------------------------------------------------------------------- */
+function bspb_ep_get_widget_settings(int $post_id, string $widget_id, &$reason = '')
+{
+    $located = bspb_ep_locate_element($post_id, $widget_id, $reason);
+    if ($located === null) {
         return null;
     }
 
-    $element_data = bspb_ep_find_element($document->get_elements_data(), $widget_id);
-    if ($element_data === null) {
-        return null;
-    }
+    list($element_data) = $located;
 
     // create_element_instance сливает сохранённые значения с дефолтами контролов
     // и попутно (лениво) регистрирует виджет, если он ещё не зарегистрирован.
     $element = \Elementor\Plugin::$instance->elements_manager->create_element_instance($element_data);
     if (!$element) {
+        $reason = 'create_element_instance вернул null (widgetType='
+            . (isset($element_data['widgetType']) ? $element_data['widgetType'] : '?') . ')';
         return null;
     }
 
-    return $element->get_settings_for_display();
+    $settings = $element->get_settings_for_display();
+    if (empty($settings['payment_options'])) {
+        $reason = 'payment_options пуст; ключи settings: ' . implode(',', array_keys((array) $settings));
+        return null;
+    }
+
+    return $settings;
 }
 
 /* -------------------------------------------------------------------------
@@ -135,14 +200,42 @@ function bspb_ep_ajax_create_payment()
         wp_send_json_error(['message' => 'Elementor не активен.'], 500);
     }
 
-    $settings = bspb_ep_get_widget_settings($post_id, $widget_id);
-    if ($settings === null || empty($settings['payment_options'][$index])) {
-        wp_send_json_error(['message' => 'Вариант оплаты не найден.'], 404);
+    $option = null;
+    $reason = '';
+
+    // 1) Основной путь: прайс-лист, сохранённый виджетом при рендере.
+    $store = bspb_ep_get_stored_options($widget_id);
+    if (is_array($store) && isset($store[$index])) {
+        $option = $store[$index];
+    } else {
+        // 2) Фолбэк: перечитать настройки виджета из дерева Elementor.
+        $settings = bspb_ep_get_widget_settings($post_id, $widget_id, $reason);
+        if ($settings !== null && isset($settings['payment_options'][$index])) {
+            $raw = $settings['payment_options'][$index];
+            $option = [
+                'price' => isset($raw['option_price']) ? (float) $raw['option_price'] : 0.0,
+                'label' => isset($raw['option_label']) ? (string) $raw['option_label'] : '',
+            ];
+        } elseif ($reason === '') {
+            $reason = $store === null
+                ? 'transient отсутствует и виджет не найден в дереве'
+                : 'нет варианта с индексом ' . $index;
+        }
     }
 
-    $option = $settings['payment_options'][$index];
-    $price  = isset($option['option_price']) ? (float) $option['option_price'] : 0.0;
-    $label  = isset($option['option_label']) ? sanitize_text_field($option['option_label']) : '';
+    if ($option === null) {
+        error_log('[BSPB Payment] Вариант не найден: post_id=' . $post_id
+            . ' widget_id=' . $widget_id . ' index=' . $index . ' | ' . $reason);
+
+        $response = ['message' => 'Вариант оплаты не найден.'];
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            $response['debug'] = $reason;
+        }
+        wp_send_json_error($response, 404);
+    }
+
+    $price = (float) $option['price'];
+    $label = sanitize_text_field($option['label']);
 
     if ($price <= 0) {
         wp_send_json_error(['message' => 'Неверная сумма оплаты.'], 400);

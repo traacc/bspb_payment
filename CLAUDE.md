@@ -16,12 +16,15 @@ WordPress-плагин **BSPB Elementor Payment**: добавляет видже
 Поток оплаты:
 
 1. Виджет рендерит варианты как `<input type="radio">` + кнопку (PHP, `render()`).
-2. По клику [assets/bspb-payment.js](assets/bspb-payment.js) шлёт в `admin-ajax.php`
+2. На этапе `render()` виджет сохраняет прайс-лист (`index => [price, label]`) в
+   transient по `widget_id` (`bspb_ep_store_options()`).
+3. По клику [assets/bspb-payment.js](assets/bspb-payment.js) шлёт в `admin-ajax.php`
    **только индекс** выбранного варианта (`option_index`), `post_id`, `widget_id`,
    nonce и опциональный e-mail. Цену клиент НЕ передаёт.
-3. AJAX-обработчик `bspb_ep_ajax_create_payment` ([bspb-elementor-payment.php](bspb-elementor-payment.php))
-   перечитывает настройки виджета на сервере, берёт цену по индексу, вызывает
-   `getPaymentLink()` и возвращает HPP-URL. JS делает редирект.
+4. AJAX-обработчик `bspb_ep_ajax_create_payment` ([bspb-elementor-payment.php](bspb-elementor-payment.php))
+   берёт цену из transient по `widget_id`+индексу (фолбэк — чтение настроек из
+   дерева Elementor), вызывает `getPaymentLink()` и возвращает HPP-URL. JS делает
+   редирект.
 
 ### Ключевые файлы
 
@@ -37,13 +40,20 @@ WordPress-плагин **BSPB Elementor Payment**: добавляет видже
 
 ## Важные инварианты
 
-- **Цена только с сервера.** Никогда не доверяй сумме/цене из запроса клиента —
-  бери из настроек виджета через `bspb_ep_get_widget_settings()`. Это защита от
-  подмены суммы.
-- **Настройки виджета читай с учётом дефолтов.** Используй
-  `create_element_instance()` + `get_settings_for_display()`, а НЕ сырой
-  `get_elements_data()` — Elementor не сохраняет в БД значения контролов,
-  оставленные по умолчанию (это была причина бага «Вариант оплаты не найден»).
+- **Цена только с сервера.** Никогда не доверяй сумме/цене из запроса клиента.
+  Источник цены — transient, заполняемый виджетом при рендере
+  (`bspb_ep_store_options()` → `bspb_ep_get_stored_options()`). Клиент шлёт лишь
+  индекс. Это защита от подмены суммы.
+- **Не ищи виджет по дереву документа как основной путь.** Виджет может лежать в
+  шаблоне Theme Builder / Loop / вставленном шаблоне — тогда его `id` нет в дереве
+  страницы (`get_elements_data()` вернёт `element_not_found`). Поэтому прайс-лист
+  кладётся в transient при рендере; чтение настроек из дерева
+  (`bspb_ep_get_widget_settings()` + `create_element_instance()`) оставлено только
+  как фолбэк.
+- **Настройки виджета читай с учётом дефолтов.** Если всё же читаешь из дерева —
+  используй `create_element_instance()` + `get_settings_for_display()`, а НЕ сырой
+  `get_elements_data()`: Elementor не сохраняет в БД значения контролов,
+  оставленные по умолчанию.
 - **Конфиг банка — через фильтр.** `getPaymentLink()` берёт настройки из
   `bspb_get_config()`, который применяет фильтр `bspb_config`. Админ-страница
   (`Bspb_Settings::filter_config`) переопределяет дефолты из константы
