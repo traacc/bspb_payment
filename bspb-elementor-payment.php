@@ -193,6 +193,56 @@ function bspb_ep_get_widget_settings(int $post_id, string $widget_id, &$reason =
 }
 
 /* -------------------------------------------------------------------------
+ * Письмо администратору о созданной оплате.
+ * Отправляется при успешной генерации ссылки (т.е. покупатель начал оплату;
+ * факт завершения оплаты этим не подтверждается).
+ * ---------------------------------------------------------------------- */
+function bspb_ep_notify_admin(array $data): void
+{
+    if (!class_exists('Bspb_Settings')) {
+        return;
+    }
+    $settings = Bspb_Settings::get();
+    $to = isset($settings['notify_email']) ? trim($settings['notify_email']) : '';
+    if ($to === '' || !is_email($to)) {
+        return; // Уведомления отключены.
+    }
+
+    $site = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+    $price = number_format_i18n($data['price'], ($data['price'] == (int) $data['price']) ? 0 : 2);
+
+    $lines = [
+        sprintf('Сайт: %s', $site),
+        sprintf('Дата: %s', current_time('d.m.Y H:i')),
+        sprintf('Вариант: %s', $data['label'] !== '' ? $data['label'] : '—'),
+        sprintf('Сумма: %s ₽', $price),
+    ];
+    if ($data['select_value'] !== '') {
+        $lines[] = sprintf('%s: %s',
+            $data['select_label'] !== '' ? $data['select_label'] : 'Доп. поле',
+            $data['select_value']);
+    }
+    if ($data['email'] !== '') {
+        $lines[] = sprintf('E-mail покупателя: %s', $data['email']);
+    }
+    if ($data['phone'] !== '') {
+        $lines[] = sprintf('Телефон: %s', $data['phone']);
+    }
+    if (!empty($data['page'])) {
+        $lines[] = sprintf('Страница: %s', $data['page']);
+    }
+    $lines[] = '';
+    $lines[] = sprintf('Ссылка на оплату: %s', $data['url']);
+
+    $subject = sprintf('[%s] Новая оплата на %s ₽', $site, $price);
+    $body    = implode("\r\n", $lines);
+
+    if (!wp_mail($to, $subject, $body)) {
+        error_log('[BSPB Payment] Не удалось отправить уведомление администратору на ' . $to);
+    }
+}
+
+/* -------------------------------------------------------------------------
  * AJAX-обработчик создания оплаты.
  * Цена берётся ТОЛЬКО из настроек виджета на сервере — клиент передаёт лишь
  * индекс выбранного варианта.
@@ -277,9 +327,10 @@ function bspb_ep_ajax_create_payment()
     }
 
     // Значение Select берём ТОЛЬКО из серверного списка по индексу.
+    $select_value = '';
     if ($select_index >= 0 && isset($select_values[$select_index]) && $select_values[$select_index] !== '') {
-        $sval = sanitize_text_field($select_values[$select_index]);
-        $desc_parts[] = ($select_label !== '' ? sanitize_text_field($select_label) . ': ' : '') . $sval;
+        $select_value = sanitize_text_field($select_values[$select_index]);
+        $desc_parts[] = ($select_label !== '' ? sanitize_text_field($select_label) . ': ' : '') . $select_value;
     }
 
     // Телефон — свободный ввод; нормализуем (цифры и + ( ) - пробел).
@@ -295,6 +346,19 @@ function bspb_ep_ajax_create_payment()
 
     try {
         $url = getPaymentLink($price, $description, $email);
+
+        // Уведомление администратору (ошибка отправки не ломает оплату).
+        bspb_ep_notify_admin([
+            'price'        => $price,
+            'label'        => $label,
+            'select_label' => sanitize_text_field($select_label),
+            'select_value' => $select_value,
+            'email'        => $email ? $email : '',
+            'phone'        => $phone_clean,
+            'page'         => get_permalink($post_id) ?: '',
+            'url'          => $url,
+        ]);
+
         wp_send_json_success(['url' => $url]);
     } catch (\Throwable $e) {
         // Подробности — в лог, пользователю — общее сообщение.

@@ -35,6 +35,8 @@ class Bspb_Settings
             'cert_pem'     => BSPB_EP_DIR . '/crt/cert.pem',
             'cert_key'     => BSPB_EP_DIR . '/crt/cert.key',
             'log_file'     => BSPB_EP_DIR . '/logs/log.txt',
+            // Уведомления администратору о созданных оплатах.
+            'notify_email' => get_option('admin_email'),
         ];
     }
 
@@ -140,6 +142,25 @@ class Bspb_Settings
                 ['key' => $key, 'type' => $meta[1], 'label_for' => self::OPTION . '_' . $key]
             );
         }
+
+        // Секция уведомлений.
+        add_settings_section(
+            'bspb_notify',
+            __('Уведомления', 'bspb'),
+            function () {
+                echo '<p>' . esc_html__('Письмо администратору при создании ссылки на оплату.', 'bspb') . '</p>';
+            },
+            self::PAGE
+        );
+
+        add_settings_field(
+            'notify_email',
+            esc_html__('Email для уведомлений (пусто — не слать)', 'bspb'),
+            [__CLASS__, 'render_field'],
+            self::PAGE,
+            'bspb_notify',
+            ['key' => 'notify_email', 'type' => 'email', 'label_for' => self::OPTION . '_notify_email']
+        );
     }
 
     /**
@@ -167,7 +188,7 @@ class Bspb_Settings
             return;
         }
 
-        $input_type = in_array($type, ['password', 'url'], true) ? $type : 'text';
+        $input_type = in_array($type, ['password', 'url', 'email'], true) ? $type : 'text';
         printf(
             '<input type="%1$s" id="%2$s" name="%3$s" value="%4$s" class="regular-text" autocomplete="off" />',
             esc_attr($input_type),
@@ -195,6 +216,7 @@ class Bspb_Settings
         $clean['cert_pem']     = isset($input['cert_pem']) ? sanitize_text_field($input['cert_pem']) : '';
         $clean['cert_key']     = isset($input['cert_key']) ? sanitize_text_field($input['cert_key']) : '';
         $clean['log_file']     = isset($input['log_file']) ? sanitize_text_field($input['log_file']) : '';
+        $clean['notify_email'] = isset($input['notify_email']) ? sanitize_email($input['notify_email']) : '';
 
         // Пустое поле пароля — не затираем сохранённый ранее пароль.
         if (isset($input['password']) && $input['password'] !== '') {
