@@ -50,6 +50,27 @@ const BSPB_CONFIG = [
 ];
 
 /**
+ * Возвращает итоговый конфиг магазина.
+ *
+ * За основу берутся дефолты из константы BSPB_CONFIG. Если код выполняется
+ * внутри WordPress, значения можно переопределить через фильтр 'bspb_config'
+ * (например, из админ-страницы плагина). В CLI фильтры недоступны — используются
+ * дефолты из константы.
+ *
+ * @return array
+ */
+function bspb_get_config(): array
+{
+    $config = BSPB_CONFIG;
+
+    if (function_exists('apply_filters')) {
+        $config = apply_filters('bspb_config', $config);
+    }
+
+    return $config;
+}
+
+/**
  * Создаёт заказ в платёжной системе и возвращает ссылку на оплату.
  *
  * @param float       $amount      Сумма заказа (в рублях, например 1500.50).
@@ -71,14 +92,17 @@ function getPaymentLink(float $amount, ?string $description = null, ?string $ema
 
     $description = $description ?? ('Оплата на сумму ' . $amount . ' RUB');
 
+    // Получаем актуальный конфиг (дефолты из константы + переопределения из админки).
+    $config = bspb_get_config();
+
     // Инициализируем SDK банка.
     $bspb = new Bspb(
-        BSPB_CONFIG['cert_pem'],
-        BSPB_CONFIG['cert_key'],
-        BSPB_CONFIG['merchant'],
-        BSPB_CONFIG['password'],
-        BSPB_CONFIG['is_test'],
-        BSPB_CONFIG['log_file']            // строка-путь к логу или null
+        $config['cert_pem'],
+        $config['cert_key'],
+        $config['merchant'],
+        $config['password'],
+        $config['is_test'],
+        $config['log_file']            // строка-путь к логу или null
     );
 
     // Формируем запрос на создание заказа.
@@ -86,7 +110,7 @@ function getPaymentLink(float $amount, ?string $description = null, ?string $ema
         ->setAmount($amount)
         ->setTitle($description)
         ->setDescription($description)
-        ->setHppRedirectUrl(BSPB_CONFIG['redirect_url']);
+        ->setHppRedirectUrl($config['redirect_url']);
 
     if (!empty($email)) {
         $request->setSrcEmail($email);
