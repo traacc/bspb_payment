@@ -147,6 +147,88 @@ class Bspb_Payment_Widget extends Widget_Base
             'condition' => ['collect_email' => 'yes'],
         ]);
 
+        $this->add_control('collect_phone', [
+            'label'        => __('Запрашивать телефон', 'bspb'),
+            'type'         => Controls_Manager::SWITCHER,
+            'label_on'     => __('Да', 'bspb'),
+            'label_off'    => __('Нет', 'bspb'),
+            'return_value' => 'yes',
+            'default'      => '',
+            'separator'    => 'before',
+        ]);
+
+        $this->add_control('phone_required', [
+            'label'        => __('Телефон обязателен', 'bspb'),
+            'type'         => Controls_Manager::SWITCHER,
+            'label_on'     => __('Да', 'bspb'),
+            'label_off'    => __('Нет', 'bspb'),
+            'return_value' => 'yes',
+            'default'      => '',
+            'condition'    => ['collect_phone' => 'yes'],
+        ]);
+
+        $this->add_control('phone_placeholder', [
+            'label'     => __('Placeholder телефона', 'bspb'),
+            'type'      => Controls_Manager::TEXT,
+            'default'   => __('Телефон', 'bspb'),
+            'condition' => ['collect_phone' => 'yes'],
+        ]);
+
+        $this->end_controls_section();
+
+        /* ---------- Секция: Настраиваемое Select-поле ---------- */
+        $this->start_controls_section('section_select', [
+            'label' => __('Доп. поле (выпадающий список)', 'bspb'),
+            'tab'   => Controls_Manager::TAB_CONTENT,
+        ]);
+
+        $this->add_control('enable_select', [
+            'label'        => __('Показывать поле-список', 'bspb'),
+            'type'         => Controls_Manager::SWITCHER,
+            'label_on'     => __('Да', 'bspb'),
+            'label_off'    => __('Нет', 'bspb'),
+            'return_value' => 'yes',
+            'default'      => '',
+        ]);
+
+        $this->add_control('select_label', [
+            'label'       => __('Подпись поля', 'bspb'),
+            'type'        => Controls_Manager::TEXT,
+            'default'     => __('Выберите вариант', 'bspb'),
+            'label_block' => true,
+            'condition'   => ['enable_select' => 'yes'],
+        ]);
+
+        $this->add_control('select_required', [
+            'label'        => __('Обязательное', 'bspb'),
+            'type'         => Controls_Manager::SWITCHER,
+            'label_on'     => __('Да', 'bspb'),
+            'label_off'    => __('Нет', 'bspb'),
+            'return_value' => 'yes',
+            'default'      => '',
+            'condition'    => ['enable_select' => 'yes'],
+        ]);
+
+        $select_repeater = new Repeater();
+        $select_repeater->add_control('select_option_label', [
+            'label'       => __('Пункт списка', 'bspb'),
+            'type'        => Controls_Manager::TEXT,
+            'default'     => __('Вариант', 'bspb'),
+            'label_block' => true,
+        ]);
+
+        $this->add_control('select_options', [
+            'label'       => __('Пункты списка', 'bspb'),
+            'type'        => Controls_Manager::REPEATER,
+            'fields'      => $select_repeater->get_controls(),
+            'default'     => [
+                ['select_option_label' => __('Вариант 1', 'bspb')],
+                ['select_option_label' => __('Вариант 2', 'bspb')],
+            ],
+            'title_field' => '{{{ select_option_label }}}',
+            'condition'   => ['enable_select' => 'yes'],
+        ]);
+
         $this->end_controls_section();
 
         /* ---------- Секция: Стиль ---------- */
@@ -240,12 +322,26 @@ class Bspb_Payment_Widget extends Widget_Base
             }
         }
 
-        // Сохраняем прайс-лист на сервере (index => price/label). AJAX-обработчик
-        // возьмёт цену отсюда по widget_id — не зависит от того, где размещён
-        // виджет (страница, шаблон Theme Builder, Loop и т.п.).
-        if (function_exists('bspb_ep_store_options')) {
-            bspb_ep_store_options($widget_id, $options);
+        // Конфигурация доп. поля-списка.
+        $select_enabled = (!empty($settings['enable_select']) && $settings['enable_select'] === 'yes');
+        $select_label   = isset($settings['select_label']) ? $settings['select_label'] : '';
+        $select_options = ($select_enabled && !empty($settings['select_options'])) ? $settings['select_options'] : [];
+        $select_values  = [];
+        foreach ($select_options as $so) {
+            $select_values[] = isset($so['select_option_label']) ? (string) $so['select_option_label'] : '';
         }
+
+        // Сохраняем прайс-лист и допустимые значения поля-списка на сервере.
+        // AJAX-обработчик возьмёт цену/значение отсюда по widget_id — не зависит
+        // от того, где размещён виджет (страница, шаблон Theme Builder, Loop).
+        if (function_exists('bspb_ep_store_options')) {
+            bspb_ep_store_options($widget_id, $options, [
+                'select_label'  => $select_label,
+                'select_values' => $select_values,
+            ]);
+        }
+
+        $select_name = 'bspb_select_' . $widget_id;
         ?>
         <div class="bspb-payment-widget"
              data-post-id="<?php echo esc_attr($post_id); ?>"
@@ -281,10 +377,32 @@ class Bspb_Payment_Widget extends Widget_Base
                 <?php endforeach; ?>
             </div>
 
+            <?php if ($select_enabled && !empty($select_values)) : ?>
+                <label class="bspb-field bspb-field-select">
+                    <?php if ($select_label !== '') : ?>
+                        <span class="bspb-field-label"><?php echo esc_html($select_label); ?></span>
+                    <?php endif; ?>
+                    <select class="bspb-select"
+                            data-required="<?php echo !empty($settings['select_required']) && $settings['select_required'] === 'yes' ? '1' : ''; ?>">
+                        <option value=""><?php echo esc_html($select_label !== '' ? $select_label : __('— выберите —', 'bspb')); ?></option>
+                        <?php foreach ($select_values as $si => $sval) : ?>
+                            <option value="<?php echo esc_attr($si); ?>"><?php echo esc_html($sval); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            <?php endif; ?>
+
             <?php if (!empty($settings['collect_email']) && $settings['collect_email'] === 'yes') : ?>
                 <input type="email"
                        class="bspb-email"
                        placeholder="<?php echo esc_attr($settings['email_placeholder']); ?>" />
+            <?php endif; ?>
+
+            <?php if (!empty($settings['collect_phone']) && $settings['collect_phone'] === 'yes') : ?>
+                <input type="tel"
+                       class="bspb-phone"
+                       data-required="<?php echo !empty($settings['phone_required']) && $settings['phone_required'] === 'yes' ? '1' : ''; ?>"
+                       placeholder="<?php echo esc_attr($settings['phone_placeholder']); ?>" />
             <?php endif; ?>
 
             <button type="button" class="bspb-pay-button">

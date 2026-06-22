@@ -10,6 +10,8 @@
         var button = widget.querySelector('.bspb-pay-button');
         var message = widget.querySelector('.bspb-message');
         var emailField = widget.querySelector('.bspb-email');
+        var phoneField = widget.querySelector('.bspb-phone');
+        var selectField = widget.querySelector('.bspb-select');
         if (!button) {
             return;
         }
@@ -40,6 +42,30 @@
                 return;
             }
 
+            // Доп. поле-список.
+            var selectIndex = '';
+            if (selectField) {
+                selectIndex = selectField.value;
+                if (selectField.getAttribute('data-required') === '1' && selectIndex === '') {
+                    showMessage(message, BSPB_PAYMENT.i18n.select, true);
+                    return;
+                }
+            }
+
+            // Телефон.
+            var phone = phoneField ? phoneField.value.trim() : '';
+            if (phoneField) {
+                var phoneRequired = phoneField.getAttribute('data-required') === '1';
+                if (phoneRequired && phone === '') {
+                    showMessage(message, BSPB_PAYMENT.i18n.phone, true);
+                    return;
+                }
+                if (phone !== '' && phone.replace(/\D/g, '').length < 6) {
+                    showMessage(message, BSPB_PAYMENT.i18n.phone, true);
+                    return;
+                }
+            }
+
             var params = new URLSearchParams();
             params.append('action', 'bspb_create_payment');
             params.append('nonce', BSPB_PAYMENT.nonce);
@@ -47,6 +73,8 @@
             params.append('widget_id', widget.getAttribute('data-widget-id'));
             params.append('option_index', checked.value);
             params.append('email', email);
+            params.append('phone', phone);
+            params.append('select_index', selectIndex);
 
             button.disabled = true;
             showMessage(message, BSPB_PAYMENT.i18n.wait, false);

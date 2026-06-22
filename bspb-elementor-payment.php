@@ -63,6 +63,8 @@ add_action('wp_enqueue_scripts', function () {
             'wait'    => __('Создаём ссылку на оплату…', 'bspb'),
             'error'   => __('Не удалось создать оплату. Попробуйте позже.', 'bspb'),
             'email'   => __('Введите корректный e-mail.', 'bspb'),
+            'phone'   => __('Введите корректный телефон.', 'bspb'),
+            'select'  => __('Выберите значение в списке.', 'bspb'),
         ],
     ]);
 });
@@ -98,23 +100,35 @@ function bspb_ep_options_key(string $widget_id): string
     return 'bspb_ep_opts_' . $widget_id;
 }
 
-function bspb_ep_store_options(string $widget_id, array $options): void
+function bspb_ep_store_options(string $widget_id, array $options, array $extra = []): void
 {
-    $store = [];
+    $opts = [];
     foreach ($options as $i => $opt) {
-        $store[$i] = [
+        $opts[$i] = [
             'price' => isset($opt['option_price']) ? (float) $opt['option_price'] : 0.0,
             'label' => isset($opt['option_label']) ? (string) $opt['option_label'] : '',
         ];
     }
+
+    $payload = [
+        'options'       => $opts,
+        'select_label'  => isset($extra['select_label']) ? (string) $extra['select_label'] : '',
+        'select_values' => isset($extra['select_values']) && is_array($extra['select_values'])
+            ? array_values($extra['select_values'])
+            : [],
+    ];
+
     // Месяц жизни; перезаписывается при каждом рендере виджета.
-    set_transient(bspb_ep_options_key($widget_id), $store, MONTH_IN_SECONDS);
+    set_transient(bspb_ep_options_key($widget_id), $payload, MONTH_IN_SECONDS);
 }
 
-function bspb_ep_get_stored_options(string $widget_id)
+function bspb_ep_get_stored_payload(string $widget_id)
 {
-    $store = get_transient(bspb_ep_options_key($widget_id));
-    return is_array($store) ? $store : null;
+    $payload = get_transient(bspb_ep_options_key($widget_id));
+    if (!is_array($payload) || !isset($payload['options'])) {
+        return null;
+    }
+    return $payload;
 }
 
 /* -------------------------------------------------------------------------
@@ -187,10 +201,13 @@ function bspb_ep_ajax_create_payment()
 {
     check_ajax_referer('bspb_payment', 'nonce');
 
-    $post_id   = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
-    $widget_id = isset($_POST['widget_id']) ? sanitize_text_field(wp_unslash($_POST['widget_id'])) : '';
-    $index     = isset($_POST['option_index']) ? absint($_POST['option_index']) : -1;
-    $email     = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
+    $post_id      = isset($_POST['post_id']) ? absint($_POST['post_id']) : 0;
+    $widget_id    = isset($_POST['widget_id']) ? sanitize_text_field(wp_unslash($_POST['widget_id'])) : '';
+    $index        = isset($_POST['option_index']) ? absint($_POST['option_index']) : -1;
+    $email        = isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '';
+    $phone        = isset($_POST['phone']) ? sanitize_text_field(wp_unslash($_POST['phone'])) : '';
+    $select_index = (isset($_POST['select_index']) && $_POST['select_index'] !== '')
+        ? absint($_POST['select_index']) : -1;
 
     if (!$post_id || $widget_id === '' || $index < 0) {
         wp_send_json_error(['message' => 'Некорректные параметры запроса.'], 400);
@@ -200,13 +217,17 @@ function bspb_ep_ajax_create_payment()
         wp_send_json_error(['message' => 'Elementor не активен.'], 500);
     }
 
-    $option = null;
-    $reason = '';
+    $option        = null;
+    $select_label  = '';
+    $select_values = [];
+    $reason        = '';
 
     // 1) Основной путь: прайс-лист, сохранённый виджетом при рендере.
-    $store = bspb_ep_get_stored_options($widget_id);
-    if (is_array($store) && isset($store[$index])) {
-        $option = $store[$index];
+    $payload = bspb_ep_get_stored_payload($widget_id);
+    if ($payload !== null && isset($payload['options'][$index])) {
+        $option        = $payload['options'][$index];
+        $select_label  = $payload['select_label'];
+        $select_values = $payload['select_values'];
     } else {
         // 2) Фолбэк: перечитать настройки виджета из дерева Elementor.
         $settings = bspb_ep_get_widget_settings($post_id, $widget_id, $reason);
@@ -216,8 +237,15 @@ function bspb_ep_ajax_create_payment()
                 'price' => isset($raw['option_price']) ? (float) $raw['option_price'] : 0.0,
                 'label' => isset($raw['option_label']) ? (string) $raw['option_label'] : '',
             ];
+            $select_label = isset($settings['select_label']) ? (string) $settings['select_label'] : '';
+            if (!empty($settings['enable_select']) && $settings['enable_select'] === 'yes'
+                && !empty($settings['select_options'])) {
+                foreach ($settings['select_options'] as $so) {
+                    $select_values[] = isset($so['select_option_label']) ? (string) $so['select_option_label'] : '';
+                }
+            }
         } elseif ($reason === '') {
-            $reason = $store === null
+            $reason = $payload === null
                 ? 'transient отсутствует и виджет не найден в дереве'
                 : 'нет варианта с индексом ' . $index;
         }
@@ -241,11 +269,32 @@ function bspb_ep_ajax_create_payment()
         wp_send_json_error(['message' => 'Неверная сумма оплаты.'], 400);
     }
 
+    // Собираем описание заказа: вариант + выбор в списке + телефон.
+    // (В SDK нет отдельных полей телефона/доп.данных — кладём в description.)
+    $desc_parts = [];
+    if ($label !== '') {
+        $desc_parts[] = $label;
+    }
+
+    // Значение Select берём ТОЛЬКО из серверного списка по индексу.
+    if ($select_index >= 0 && isset($select_values[$select_index]) && $select_values[$select_index] !== '') {
+        $sval = sanitize_text_field($select_values[$select_index]);
+        $desc_parts[] = ($select_label !== '' ? sanitize_text_field($select_label) . ': ' : '') . $sval;
+    }
+
+    // Телефон — свободный ввод; нормализуем (цифры и + ( ) - пробел).
+    $phone_clean = trim(preg_replace('/[^\d\+\(\)\-\s]/u', '', $phone));
+    if ($phone_clean !== '') {
+        $desc_parts[] = 'Тел.: ' . $phone_clean;
+    }
+
+    $description = !empty($desc_parts) ? implode('; ', $desc_parts) : null;
+
     // E-mail передаём в SDK только если он валиден.
     $email = is_email($email) ? $email : null;
 
     try {
-        $url = getPaymentLink($price, $label !== '' ? $label : null, $email);
+        $url = getPaymentLink($price, $description, $email);
         wp_send_json_success(['url' => $url]);
     } catch (\Throwable $e) {
         // Подробности — в лог, пользователю — общее сообщение.
