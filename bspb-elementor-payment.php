@@ -68,23 +68,49 @@ add_action('wp_enqueue_scripts', function () {
 });
 
 /* -------------------------------------------------------------------------
- * Рекурсивный поиск настроек элемента Elementor по его id.
- * Нужен, чтобы взять ЦЕНУ из сохранённых на сервере данных, а не с клиента.
+ * Рекурсивный поиск данных элемента Elementor по его id.
+ * Возвращаем весь узел (а не только settings), чтобы затем создать экземпляр
+ * элемента и получить настройки С УЧЁТОМ дефолтов контролов.
  * ---------------------------------------------------------------------- */
-function bspb_ep_find_element_settings(array $elements, string $widget_id)
+function bspb_ep_find_element(array $elements, string $widget_id)
 {
     foreach ($elements as $element) {
         if (isset($element['id']) && $element['id'] === $widget_id) {
-            return isset($element['settings']) ? $element['settings'] : null;
+            return $element;
         }
         if (!empty($element['elements']) && is_array($element['elements'])) {
-            $found = bspb_ep_find_element_settings($element['elements'], $widget_id);
+            $found = bspb_ep_find_element($element['elements'], $widget_id);
             if ($found !== null) {
                 return $found;
             }
         }
     }
     return null;
+}
+
+/* -------------------------------------------------------------------------
+ * Возвращает настройки виджета по post_id + widget_id с учётом дефолтов.
+ * ---------------------------------------------------------------------- */
+function bspb_ep_get_widget_settings(int $post_id, string $widget_id)
+{
+    $document = \Elementor\Plugin::$instance->documents->get($post_id);
+    if (!$document) {
+        return null;
+    }
+
+    $element_data = bspb_ep_find_element($document->get_elements_data(), $widget_id);
+    if ($element_data === null) {
+        return null;
+    }
+
+    // create_element_instance сливает сохранённые значения с дефолтами контролов
+    // и попутно (лениво) регистрирует виджет, если он ещё не зарегистрирован.
+    $element = \Elementor\Plugin::$instance->elements_manager->create_element_instance($element_data);
+    if (!$element) {
+        return null;
+    }
+
+    return $element->get_settings_for_display();
 }
 
 /* -------------------------------------------------------------------------
@@ -109,12 +135,7 @@ function bspb_ep_ajax_create_payment()
         wp_send_json_error(['message' => 'Elementor не активен.'], 500);
     }
 
-    $document = \Elementor\Plugin::$instance->documents->get($post_id);
-    if (!$document) {
-        wp_send_json_error(['message' => 'Документ не найден.'], 404);
-    }
-
-    $settings = bspb_ep_find_element_settings($document->get_elements_data(), $widget_id);
+    $settings = bspb_ep_get_widget_settings($post_id, $widget_id);
     if ($settings === null || empty($settings['payment_options'][$index])) {
         wp_send_json_error(['message' => 'Вариант оплаты не найден.'], 404);
     }
