@@ -16,6 +16,10 @@
             return;
         }
 
+        if (phoneField) {
+            applyPhoneMask(phoneField);
+        }
+
         // Подсветка выбранного варианта.
         widget.addEventListener('change', function (e) {
             if (e.target && e.target.matches('input[type=radio]')) {
@@ -56,11 +60,13 @@
             var phone = phoneField ? phoneField.value.trim() : '';
             if (phoneField) {
                 var phoneRequired = phoneField.getAttribute('data-required') === '1';
-                if (phoneRequired && phone === '') {
+                var phoneDigits = phone.replace(/\D/g, '');
+                if (phoneRequired && phoneDigits === '') {
                     showMessage(message, BSPB_PAYMENT.i18n.phone, true);
                     return;
                 }
-                if (phone !== '' && phone.replace(/\D/g, '').length < 6) {
+                // Маска требует полный номер: +7 (XXX) XXX-XX-XX = 11 цифр.
+                if (phoneDigits !== '' && phoneDigits.length !== 11) {
                     showMessage(message, BSPB_PAYMENT.i18n.phone, true);
                     return;
                 }
@@ -102,6 +108,67 @@
                     showMessage(message, BSPB_PAYMENT.i18n.error, true);
                     button.disabled = false;
                 });
+        });
+    }
+
+    // Маска российского номера: +7 (XXX) XXX-XX-XX.
+    // Поле принимает только цифры, форматирование подставляется автоматически.
+    function applyPhoneMask(field) {
+        field.setAttribute('inputmode', 'tel');
+        field.setAttribute('maxlength', '18');
+        field.setAttribute('autocomplete', 'tel');
+
+        function format(digits) {
+            // Нормализуем ведущую цифру к 7 (8 -> 7), берём максимум 11 цифр.
+            if (digits[0] === '8') {
+                digits = '7' + digits.slice(1);
+            }
+            if (digits[0] !== '7') {
+                digits = '7' + digits;
+            }
+            digits = digits.slice(0, 11);
+
+            var rest = digits.slice(1);
+            var out = '+7';
+            if (rest.length > 0) {
+                out += ' (' + rest.slice(0, 3);
+            }
+            if (rest.length >= 3) {
+                out += ') ' + rest.slice(3, 6);
+            }
+            if (rest.length >= 6) {
+                out += '-' + rest.slice(6, 8);
+            }
+            if (rest.length >= 8) {
+                out += '-' + rest.slice(8, 10);
+            }
+            return out;
+        }
+
+        function onInput() {
+            var digits = field.value.replace(/\D/g, '');
+            field.value = digits === '' ? '' : format(digits);
+        }
+
+        field.addEventListener('input', onInput);
+        field.addEventListener('focus', function () {
+            if (field.value === '') {
+                field.value = '+7 (';
+            }
+        });
+        field.addEventListener('blur', function () {
+            // Если пользователь ничего не ввёл сверх префикса — очищаем,
+            // чтобы placeholder и валидация «обязательно» работали корректно.
+            if (field.value.replace(/\D/g, '') === '7') {
+                field.value = '';
+            }
+        });
+        // Не даём курсору застрять перед префиксом «+7 (».
+        field.addEventListener('keydown', function (e) {
+            if (e.key === 'Backspace' && field.value.replace(/\D/g, '').length <= 1) {
+                field.value = '';
+                e.preventDefault();
+            }
         });
     }
 

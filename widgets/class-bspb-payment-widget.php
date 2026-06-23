@@ -170,7 +170,7 @@ class Bspb_Payment_Widget extends Widget_Base
         $this->add_control('phone_placeholder', [
             'label'     => __('Placeholder телефона', 'bspb'),
             'type'      => Controls_Manager::TEXT,
-            'default'   => __('Телефон', 'bspb'),
+            'default'   => '+7 (___) ___-__-__',
             'condition' => ['collect_phone' => 'yes'],
         ]);
 
